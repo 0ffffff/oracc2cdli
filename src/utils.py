@@ -54,6 +54,54 @@ def convert_line_oracc_to_cdli(line, mapping=None, has_label=False):
         return f'{label} {word}'
     return word
 
+def load_reverse_character_mapping(csv_path='data/reference/ATF_Character_Conventions.csv'):
+    """Load the mapping from the reference CSV for CDLI -> ORACC conversion."""
+    try:
+        df = pd.read_csv(csv_path)
+        mapping = {}
+        for _, row in df.iterrows():
+            oracc_char = row['ASCII-ATF'] # e.g. 'š'
+            cdli_char = row['Unicode-ATF'] # e.g. 'sz'
+            if pd.notna(oracc_char) and pd.notna(cdli_char):
+                # Reverse direction: CDLI val -> ORACC val
+                mapping[str(cdli_char)] = str(oracc_char)
+        return mapping
+    except Exception as e:
+        print(f"Error loading reverse mapping: {e}")
+        return {
+            'sz': 'š', 's,': 'ṣ', 't,': 'ṭ', 'h': 'ḫ', 'j': 'ŋ'
+        }
+
+def convert_line_cdli_to_oracc(line, mapping=None, has_label=False):
+    """
+    Convert a single line from CDLI format to ORACC format.
+    """
+    if mapping is None:
+        mapping = load_reverse_character_mapping()
+
+    if not line or not isinstance(line, str):
+        return line
+
+    if has_label:
+        parts = line.strip().split(' ', 1)
+        if len(parts) < 2:
+            label = ""
+            word = parts[0]
+        else:
+            label = parts[0]
+            word = parts[1]
+    else:
+        label = ""
+        word = line.strip()
+    
+    # Sort by length descending to replace "sz" before "s", etc.
+    for cdli_char in sorted(mapping.keys(), key=len, reverse=True):
+        word = word.replace(cdli_char, mapping[cdli_char])
+    
+    if label:
+        return f'{label} {word}'
+    return word
+
 def validate_conversion(df, conversion_col='ORACC', target_col='CDLI_clean'):
     """
     Test the accuracy of the conversion against a target column.

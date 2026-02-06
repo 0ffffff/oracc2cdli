@@ -10,18 +10,7 @@ if project_root not in sys.path:
 
 from src.utils import convert_line_oracc_to_cdli, load_character_mapping
 
-def main():
-    parser = argparse.ArgumentParser(description='Convert ORACC transliteration to CDLI format.')
-    parser.add_argument('input', help='Path to the input ORACC file')
-    parser.add_argument('output', help='Path to the output CDLI file')
-    parser.add_argument('--has-label', action='store_true', 
-                        help='Indicate that lines start with an ID/label (e.g. P123:obv.1)')
-    parser.add_argument('--mapping', default=None,
-                        help='Path to the character convention mapping CSV')
-
-    args = parser.parse_args()
-
-    # Determine mapping path
+def convert_file(args, project_root):
     if args.mapping:
         mapping_path = args.mapping
     else:
@@ -56,8 +45,55 @@ def main():
     with open(args.output, 'w', encoding='utf-8') as f:
         for line in converted:
             f.write(line + '\n')
-
     print("Done.")
+
+def clean_file(args):
+    """
+    Basic cleaning of input file.
+    Strips whitespace and ensures non-empty lines.
+    """
+    if not os.path.exists(args.input):
+        print(f"Error: Input file {args.input} not found.")
+        sys.exit(1)
+
+    print(f"Cleaning {args.input}...")
+    with open(args.input, 'r', encoding='utf-8') as f:
+        lines = f.read().splitlines()
+
+    cleaned = [line.strip() for line in lines if line.strip()]
+
+    print(f"Writing cleaned output to {args.output}...")
+    with open(args.output, 'w', encoding='utf-8') as f:
+        for line in cleaned:
+            f.write(line + '\n')
+    print("Done.")
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert ORACC transliteration to CDLI format.')
+    subparsers = parser.add_subparsers(dest='command', help='Subcommands')
+
+    # Convert subcommand
+    parser_convert = subparsers.add_parser('convert', help='Convert files')
+    parser_convert.add_argument('input', help='Path to the input ORACC file')
+    parser_convert.add_argument('output', help='Path to the output CDLI file')
+    parser_convert.add_argument('--has-label', action='store_true', 
+                        help='Indicate that lines start with an ID/label (e.g. P123:obv.1)')
+    parser_convert.add_argument('--mapping', default=None,
+                        help='Path to the character convention mapping CSV')
+    
+    # Clean subcommand
+    parser_clean = subparsers.add_parser('clean', help='Clean input file')
+    parser_clean.add_argument('input', help='Path to the input file')
+    parser_clean.add_argument('output', help='Path to the output file')
+
+    args = parser.parse_args()
+
+    if args.command == 'convert':
+        convert_file(args, project_root)
+    elif args.command == 'clean':
+        clean_file(args)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
     main()

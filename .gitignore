@@ -1,1 +1,22 @@
-src/__pycache__
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+
+# Environment and secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# large datasets and DB
+data/transliteration.csv
+data/finaldf.csv
+data/word_level.csv
+data/oldassyrian-lines.csv
+data/reference/transliteration.csv
+*.db
+data/*.db

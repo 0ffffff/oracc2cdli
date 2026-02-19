@@ -1,9 +1,17 @@
+"""
+CLI for converting ORACC transliteration to CDLI format and for cleaning text files.
+
+Subcommands:
+  convert  Read an ORACC file, apply character mapping (and optional label handling), write CDLI.
+  clean    Strip lines of an input file and write to output (format-agnostic).
+
+Uses src.utils for character mapping and line-level conversion. Run from project root.
+"""
+
 import os
 import sys
 import argparse
 
-# Add the project root to sys.path so we can import from src
-# This allows running the script from the root directory
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.append(project_root)

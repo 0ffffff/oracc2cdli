@@ -1,3 +1,18 @@
+"""
+Clean CDLI transliteration lines and validate predicted output against a reference file.
+
+Workflow position: Library + CLI. No pipeline order; used after running conversion CLIs
+(oracc_to_cdli / cdli_to_oracc) to compare predicted output to a reference CDLI file.
+
+Prerequisites:
+  - Two text files (predicted and reference), typically produced by conversion scripts.
+  - No DB tables or prior data pipeline steps required.
+
+clean_line_cdli(line): normalise one line to CDLI_clean for comparison.
+validate(predicted_lines, actual_lines): compare by line ID; report mismatches and accuracy.
+CLI: python -m src.utils.validate <predicted_file> <test_file>.
+"""
+
 import argparse
 import os
 import sys

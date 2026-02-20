@@ -1,21 +1,60 @@
 """
 Reusable test functions for CDLI ↔ ORACC word-level conversion.
 
-Workflow position: Test library. No run order; used by run_word_conversion_tests.py.
-Dataset comparison tests expect rows with tr_cdli / tr_oracc (e.g. from word_level.csv).
+Use this module to build custom test flows: call the functions below with your data,
+then aggregate results and report as needed. run_word_conversion_tests.py is a sample
+runner that uses these functions.
 
 Prerequisites for dataset tests:
-  - data/word_level.csv (produced by: load_to_db.py → build_word_table.py → export_word_level.py).
-Unit tests (empty, None, malformed, round-trip) do not require any pipeline or CSV.
+  - word_level.csv with columns tr_cdli, tr_oracc (e.g. from load_to_db → build_word_table → export_word_level).
+Unit tests (empty, None, malformed, edge cases, round-trip) require no CSV.
 
-Each test function returns a result dict: { "passed", "message", "details" (optional) }.
-When comparing to word_level.csv, a failure can mean (1) conversion differs from gold, or
-(2) the row has misaligned tr_cdli/tr_oracc.
+Result format: each test returns a dict with "passed", "message", and optional "details".
+
+--------------------------------------------------------------------------------
+Table of contents (public API)
+--------------------------------------------------------------------------------
+
+Dataset comparison (single row)
+  - test_cdli_to_oracc_vs_dataset(cdli, expected_oracc, ...)  — convert CDLI→ORACC, compare to gold
+  - test_oracc_to_cdli_vs_dataset(oracc, expected_cdli, ...)  — convert ORACC→CDLI, compare to gold
+
+Round-trip (single value)
+  - test_roundtrip_cdli_to_oracc_to_cdli(cdli, ...)   — CDLI → ORACC → CDLI, compare to original
+  - test_roundtrip_oracc_to_cdli_to_oracc(oracc, ...) — ORACC → CDLI → ORACC, compare to original
+
+Empty / None / malformed
+  - test_empty_string_cdli_to_oracc()           — "" → ORACC
+  - test_empty_string_oracc_to_cdli()           — "" → CDLI
+  - test_none_cdli_to_oracc()                   — None → ORACC
+  - test_none_oracc_to_cdli()                   — None → CDLI
+  - test_malformed_cdli_to_oracc(value, ...)    — non-string CDLI → ORACC
+  - test_malformed_oracc_to_cdli(value, ...)    — non-string ORACC → CDLI
+
+Edge cases (fixed pairs)
+  - test_edge_case_pairs()                      — list of (description, cdli, oracc) pairs
+  - test_edge_cases_cdli_to_oracc()             — run CDLI→ORACC on those pairs; returns list of result dicts
+  - test_edge_cases_oracc_to_cdli()             — run ORACC→CDLI on those pairs; returns list of result dicts
+
+Batch: unit tests only
+  - run_unit_tests()                            — empty, None, malformed, edge cases; returns dict[group_name, list[result]]
+
+Batch: dataset from CSV (chunked)
+  - run_dataset_tests(csv_path, chunk_size=..., run_roundtrip_sample=..., ...) — run comparison + optional round-trip sample; returns stats dict
+
+Reporting
+  - print_summary(unit_results, dataset_stats, report_path=None) — print and optionally write Markdown report
+
+Constants (for use in your flow)
+  - DEFAULT_CHUNK_SIZE, ROUNDTRIP_SAMPLE_SIZE, MAX_FAILURES_TO_REPORT
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
+
+import pandas as pd
 
 def _converters():
     """Lazy import of conversion functions so tests work when run from project root or as module."""
@@ -33,6 +72,15 @@ def _result(passed: bool, message: str, **details: Any) -> dict[str, Any]:
     if details:
         out["details"] = details
     return out
+
+
+# -----------------------------------------------------------------------------
+# Constants for batch dataset runs (tune in your own flow if needed)
+# -----------------------------------------------------------------------------
+
+DEFAULT_CHUNK_SIZE = 100_000
+MAX_FAILURES_TO_REPORT = 50
+ROUNDTRIP_SAMPLE_SIZE = 5000
 
 
 # -----------------------------------------------------------------------------
@@ -409,3 +457,188 @@ def run_unit_tests() -> dict[str, list[dict[str, Any]]]:
     groups["edge_oracc_to_cdli"] = test_edge_cases_oracc_to_cdli()
 
     return groups
+
+
+# -----------------------------------------------------------------------------
+# Batch: run dataset tests from CSV (chunked)
+# -----------------------------------------------------------------------------
+
+def run_dataset_tests(
+    csv_path: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    run_roundtrip_sample: bool = True,
+    roundtrip_sample_size: int = ROUNDTRIP_SAMPLE_SIZE,
+    max_rows: Optional[int] = None,
+    max_failures: int = MAX_FAILURES_TO_REPORT,
+) -> dict[str, Any]:
+    """
+    Read word_level-style CSV in chunks; for each row with valid tr_cdli and tr_oracc,
+    run test_cdli_to_oracc_vs_dataset and test_oracc_to_cdli_vs_dataset.
+    Optionally run round-trip tests on a sample of rows.
+
+    Returns a dict with:
+      total_rows, rows_with_both,
+      cdli_to_oracc: {passed, failed, skipped, failures},
+      oracc_to_cdli: same,
+      roundtrip_cdli, roundtrip_oracc (if run).
+    Or {"error": "..."} if the CSV is not found.
+    """
+    if not os.path.isfile(csv_path):
+        return {"error": f"CSV not found: {csv_path}"}
+
+    stats: dict[str, Any] = {
+        "total_rows": 0,
+        "rows_with_both": 0,
+        "cdli_to_oracc": {"passed": 0, "failed": 0, "skipped": 0, "failures": []},
+        "oracc_to_cdli": {"passed": 0, "failed": 0, "skipped": 0, "failures": []},
+        "roundtrip_cdli": {"passed": 0, "failed": 0, "failures": []},
+        "roundtrip_oracc": {"passed": 0, "failed": 0, "failures": []},
+    }
+    roundtrip_sample_rows: list[dict[str, Any]] = []
+
+    chunk_iter = pd.read_csv(
+        csv_path,
+        chunksize=chunk_size,
+        dtype={"internal_id": "Int64", "id_text": str, "tr_oracc": str, "tr_cdli": str},
+    )
+    row_offset = 0
+    for chunk in chunk_iter:
+        if max_rows is not None and row_offset >= max_rows:
+            break
+        if max_rows is not None and row_offset + len(chunk) > max_rows:
+            chunk = chunk.head(max_rows - row_offset)
+        stats["total_rows"] += len(chunk)
+        for idx, row in chunk.iterrows():
+            internal_id = row.get("internal_id", row_offset + idx)
+            tr_oracc = row.get("tr_oracc")
+            tr_cdli = row.get("tr_cdli")
+            if pd.isna(tr_cdli) or pd.isna(tr_oracc):
+                stats["cdli_to_oracc"]["skipped"] += 1
+                stats["oracc_to_cdli"]["skipped"] += 1
+                continue
+            tr_cdli_s = str(tr_cdli).strip()
+            tr_oracc_s = str(tr_oracc).strip()
+            if not tr_cdli_s or not tr_oracc_s:
+                stats["cdli_to_oracc"]["skipped"] += 1
+                stats["oracc_to_cdli"]["skipped"] += 1
+                continue
+            stats["rows_with_both"] += 1
+
+            if run_roundtrip_sample and len(roundtrip_sample_rows) < roundtrip_sample_size:
+                roundtrip_sample_rows.append({
+                    "internal_id": internal_id,
+                    "tr_cdli": tr_cdli_s,
+                    "tr_oracc": tr_oracc_s,
+                })
+
+            res_c2o = test_cdli_to_oracc_vs_dataset(tr_cdli_s, tr_oracc_s, row_id=internal_id)
+            if res_c2o.get("details", {}).get("expected") is None:
+                stats["cdli_to_oracc"]["skipped"] += 1
+            elif res_c2o["passed"]:
+                stats["cdli_to_oracc"]["passed"] += 1
+            else:
+                stats["cdli_to_oracc"]["failed"] += 1
+                if len(stats["cdli_to_oracc"]["failures"]) < max_failures:
+                    stats["cdli_to_oracc"]["failures"].append(res_c2o)
+
+            res_o2c = test_oracc_to_cdli_vs_dataset(tr_oracc_s, tr_cdli_s, row_id=internal_id)
+            if res_o2c.get("details", {}).get("expected") is None:
+                stats["oracc_to_cdli"]["skipped"] += 1
+            elif res_o2c["passed"]:
+                stats["oracc_to_cdli"]["passed"] += 1
+            else:
+                stats["oracc_to_cdli"]["failed"] += 1
+                if len(stats["oracc_to_cdli"]["failures"]) < max_failures:
+                    stats["oracc_to_cdli"]["failures"].append(res_o2c)
+
+        row_offset += len(chunk)
+
+    if run_roundtrip_sample and roundtrip_sample_rows:
+        for r in roundtrip_sample_rows:
+            r_c = test_roundtrip_cdli_to_oracc_to_cdli(r["tr_cdli"], row_id=r["internal_id"])
+            if r_c["passed"]:
+                stats["roundtrip_cdli"]["passed"] += 1
+            else:
+                stats["roundtrip_cdli"]["failed"] += 1
+                if len(stats["roundtrip_cdli"]["failures"]) < max_failures:
+                    stats["roundtrip_cdli"]["failures"].append(r_c)
+            r_o = test_roundtrip_oracc_to_cdli_to_oracc(r["tr_oracc"], row_id=r["internal_id"])
+            if r_o["passed"]:
+                stats["roundtrip_oracc"]["passed"] += 1
+            else:
+                stats["roundtrip_oracc"]["failed"] += 1
+                if len(stats["roundtrip_oracc"]["failures"]) < max_failures:
+                    stats["roundtrip_oracc"]["failures"].append(r_o)
+
+    return stats
+
+
+# -----------------------------------------------------------------------------
+# Reporting
+# -----------------------------------------------------------------------------
+
+def print_summary(
+    unit_results: dict[str, list[dict[str, Any]]],
+    dataset_stats: dict[str, Any],
+    report_path: Optional[str] = None,
+) -> None:
+    """
+    Print a text summary of unit and dataset test results to stdout.
+    If report_path is set, also write a Markdown report to that file.
+    """
+    lines = []
+    lines.append("# Word conversion test report")
+    lines.append("")
+    lines.append("## Unit tests (empty, None, malformed, edge cases)")
+    lines.append("")
+    for group_name, results in unit_results.items():
+        passed = sum(1 for r in results if r["passed"])
+        total = len(results)
+        lines.append(f"- **{group_name}**: {passed}/{total} passed")
+        for r in results:
+            if not r["passed"]:
+                lines.append(f"  - FAIL: {r['message']} {r.get('details', {})}")
+    lines.append("")
+    lines.append("## Dataset tests (word_level.csv)")
+    lines.append("")
+    if "error" in dataset_stats:
+        lines.append(f"Error: {dataset_stats['error']}")
+    else:
+        lines.append(f"- Total rows: {dataset_stats['total_rows']:,}")
+        lines.append(f"- Rows with both tr_cdli and tr_oracc: {dataset_stats['rows_with_both']:,}")
+        lines.append("")
+        c2o = dataset_stats["cdli_to_oracc"]
+        o2c = dataset_stats["oracc_to_cdli"]
+        for label, d in [("CDLI → ORACC (vs dataset)", c2o), ("ORACC → CDLI (vs dataset)", o2c)]:
+            p, f, s = d["passed"], d["failed"], d["skipped"]
+            total = p + f
+            pct = (100 * p / total) if total else 0
+            lines.append(f"### {label}")
+            lines.append(f"- Passed: {p:,}, Failed: {f:,}, Skipped: {s:,}")
+            lines.append(f"- Accuracy (of compared): {pct:.2f}%")
+            if d.get("failures"):
+                lines.append("")
+                lines.append("Sample failures (first {}):".format(len(d["failures"])))
+                for i, res in enumerate(d["failures"][:20], 1):
+                    det = res.get("details", {})
+                    lines.append(f"{i}. row_id={det.get('row_id')} input={det.get('input')!r} expected={det.get('expected')!r} actual={det.get('actual')!r}")
+            lines.append("")
+        rt_c = dataset_stats.get("roundtrip_cdli", {})
+        rt_o = dataset_stats.get("roundtrip_oracc", {})
+        if rt_c and (rt_c["passed"] + rt_c["failed"]) > 0:
+            lines.append("### Round-trip CDLI → ORACC → CDLI (sample)")
+            lines.append(f"- Passed: {rt_c['passed']:,}, Failed: {rt_c['failed']:,}")
+            lines.append("")
+        if rt_o and (rt_o["passed"] + rt_o["failed"]) > 0:
+            lines.append("### Round-trip ORACC → CDLI → ORACC (sample)")
+            lines.append(f"- Passed: {rt_o['passed']:,}, Failed: {rt_o['failed']:,}")
+    lines.append("")
+    text = "\n".join(lines)
+    print(text)
+    if report_path:
+        report_dir = os.path.dirname(report_path)
+        if report_dir:
+            os.makedirs(report_dir, exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"Report written to {report_path}")

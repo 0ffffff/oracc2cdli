@@ -10,12 +10,14 @@ exact suggests conversion or normalization gaps.
 Outputs a summary dict and optional JSON for use in dataset_quality_findings.md.
 Run from project root: python3 src/preprocessing/analyze_dataset_quality.py
 """
+# TODO: fix and make sure it runs faster
 
 from __future__ import annotations
 
 import json
 import os
 import sys
+from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -200,6 +202,44 @@ def main() -> None:
     if "error" in out:
         print(out["error"])
         sys.exit(1)
+
+    lines = [
+        "# Dataset quality analysis",
+        "",
+        "Character-level similarity after CDLI↔ORACC conversion.",
+        "",
+        "## Summary",
+        "",
+        f"- **Rows loaded** (with both columns non-empty): {out['rows_loaded']:,}",
+        f"- **Sample size**: {out['sample_size']:,}",
+        "",
+        "## Classification (min similarity in both directions)",
+        "",
+        "| Label | Count | % |",
+        "|-------|-------|---|",
+    ]
+    for k, v in out["counts"].items():
+        lines.append(f"| {k} | {v:,} | {out['pct'][k]}% |")
+    lines.extend([
+        "",
+        "## Mean character similarity (converted vs gold)",
+        "",
+        f"- CDLI→ORACC vs tr_oracc: **{out['mean_sim_cdli_to_oracc']}**",
+        f"- ORACC→CDLI vs tr_cdli: **{out['mean_sim_oracc_to_cdli']}**",
+        "",
+        "## Likely misaligned (similarity below threshold)",
+        "",
+    ])
+    vl = out["very_low_similarity"]
+    lines.extend([
+        f"- sim(CDLI→ORACC, tr_oracc) < 10%: {vl['sim_c2o_below_10pct']:,}",
+        f"- sim(ORACC→CDLI, tr_cdli) < 10%: {vl['sim_o2c_below_10pct']:,}",
+        f"- sim(CDLI→ORACC, tr_oracc) < 25%: {vl['sim_c2o_below_25pct']:,}",
+        f"- sim(ORACC→CDLI, tr_cdli) < 25%: {vl['sim_o2c_below_25pct']:,}",
+        "",
+    ])
+    report_text = "\n".join(lines)
+
     print("Dataset quality analysis (character-level similarity after conversion)")
     print("=" * 60)
     print(f"Rows loaded (with both columns non-empty): {out['rows_loaded']:,}")
@@ -213,7 +253,6 @@ def main() -> None:
     print(f"  CDLI→ORACC vs tr_oracc: {out['mean_sim_cdli_to_oracc']}")
     print(f"  ORACC→CDLI vs tr_cdli:  {out['mean_sim_oracc_to_cdli']}")
     print()
-    vl = out["very_low_similarity"]
     print("Likely misaligned (similarity below threshold):")
     print(f"  sim(CDLI→ORACC, tr_oracc) < 10%: {vl['sim_c2o_below_10pct']:,}")
     print(f"  sim(ORACC→CDLI, tr_cdli) < 10%:  {vl['sim_o2c_below_10pct']:,}")
@@ -222,12 +261,18 @@ def main() -> None:
 
     results_dir = _SCRIPT_DIR / "dataset_quality_results"
     results_dir.mkdir(exist_ok=True)
+    today = date.today().isoformat()
+    md_path = results_dir / f"dataset_quality_{today}.md"
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(report_text)
+    print(f"\nReport saved to {md_path}")
+
     out_path = results_dir / "analysis_summary.json"
     # JSON-serializable: no Path objects
     out_serial = {k: v for k, v in out.items()}
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out_serial, f, indent=2, ensure_ascii=False)
-    print(f"\nResults saved to {out_path}")
+    print(f"Results saved to {out_path}")
 
 
 if __name__ == "__main__":

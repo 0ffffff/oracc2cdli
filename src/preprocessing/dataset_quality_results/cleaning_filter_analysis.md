@@ -1,0 +1,94 @@
+# How Clearly Mismatched Rows Passed the Cleaning Filter
+
+## Example rows
+
+From `word_level_cleaned_subset.csv`:
+
+| internal_id | id_text  | tr_oracc (ORACC)   | tr_cdli (CDLI)      |
+|-------------|----------|--------------------|---------------------|
+| 2002        | P414628  | babbar-ra          | siskur2-re          |
+| 2005        | P414628  | dumu               | dumu]-er-s,e-tim    |
+
+These are different words (or one is a prefix of a damaged form) but were **kept** as "conversion_issue" instead of dropped as "likely_misaligned".
+
+---
+
+## Filter logic (recap)
+
+- **Drop** when `_classify_row` returns label `"likely_misaligned"`.
+- `"likely_misaligned"` when: `sim_min < 0.25` **or** `sim_max < 0.25`.
+- **Early exit:** If `sim_c2o < 0.25` we return `"likely_misaligned"` and never compute the second conversion/similarity.
+- Similarity is `1 - (Levenshtein / max(len(a), len(b)))` via diff-match-patch (`diff_main` + `diff_levenshtein`).
+
+So a row is **kept** only if **both** directions have similarity **≥ 0.25** (and it’s not exact/high, so it’s classified as conversion_issue).
+
+---
+
+## Why these rows passed
+
+### 1. Threshold boundary: **≥ 0.25 is kept**
+
+We use **strict** `< 0.25` to drop. So:
+
+- **sim = 0.25** → we do **not** drop; we classify as conversion_issue and **keep**.
+- Any pair that lands exactly on 0.25 will therefore pass.
+
+**Example: `dumu` vs `dumu]-er-s,e-tim`**
+
+- One string is a 4‑character prefix of the other.
+- Levenshtein from `"dumu"` to `"dumu]-er-s,e-tim"` is the cost of inserting the rest → 12 edits; `max_len = 16`.
+- Similarity = `1 - 12/16 = 0.25` **exactly**.
+- So `sim_c2o` or `sim_o2c` can be **exactly 0.25**. Then:
+  - Early exit does not trigger (`0.25` is not `< 0.25`).
+  - Final label is not `"likely_misaligned"` because neither `sim_min` nor `sim_max` is `< 0.25`.
+- Result: row is **kept** as conversion_issue.
+
+So: **boundary at 0.25** (and any similarity slightly above it) allows clearly mismatched pairs where one side is a short prefix of the other.
+
+---
+
+### 2. Accidental character overlap: **short shared substrings**
+
+When the two words are different but share a few characters (e.g. same suffix or a couple of letters), Levenshtein can stay low enough that similarity rises **above** 0.25.
+
+**Example: `babbar-ra` vs `siskur2-re`**
+
+- Different words, but both end in `-re` and contain `r` and `-`.
+- Shared parts reduce edit distance (e.g. a short “re” or “-” match in the diff).
+- So Levenshtein can be, say, 7–8 instead of 9–10 → similarity in the **0.2–0.4** range.
+- If similarity is **≥ 0.25** (e.g. 0.26–0.35):
+  - Early exit does not trigger.
+  - We do the second conversion/similarity; both can still be ≥ 0.25.
+  - We then classify as **conversion_issue** and **keep** the row.
+
+So: **different words with modest character overlap** (e.g. common suffix `-re`) can get similarity just above the drop threshold and slip through.
+
+---
+
+## Root causes (summary)
+
+| Cause | Effect |
+|-------|--------|
+| **Strict `< 0.25`** | sim **= 0.25** is kept; prefix/short-vs-long pairs land exactly on the boundary. |
+| **Low bar (0.25)** | Pairs with limited overlap (e.g. shared `-re`, `r`) can reach 0.26–0.35 and be kept. |
+| **Levenshtein normalization** | `1 - lev / max(len(a), len(b))` can give relatively high scores when one string is much shorter or when a short substring matches. |
+
+So rows that are clearly mismatched (different words or one word vs. a long damaged form) can still get **sim ≥ 0.25** and pass the filter.
+
+---
+
+## Recommended changes
+
+1. **Drop when similarity ≤ 0.25**  
+   Use `sim_min <= SIM_LIKELY_MISALIGNED` (and same for early exit) so that **0.25 is dropped**, not kept. That fixes the exact-boundary case (e.g. `dumu` vs `dumu]-er-s,e-tim`).
+
+2. **Raise the “misaligned” threshold**  
+   Use a higher bar, e.g. **0.30 or 0.35**, so that pairs with only modest overlap (e.g. `babbar-ra` vs `siskur2-re`) are dropped. That removes more false keeps at the cost of possibly dropping some borderline conversion_issue rows.
+
+3. **Add a length-ratio guard**  
+   If `min(len(tr_cdli), len(tr_oracc)) / max(...) < 0.5` (or similar), treat as misaligned and drop without running conversion/similarity. That would catch short-vs-long pairs (e.g. `dumu` vs `dumu]-er-s,e-tim`) even when similarity is exactly 0.25.
+
+4. **Revisit “conversion_issue” band**  
+   Optionally require conversion_issue to have **sim_min ≥ 0.35** (or 0.4) so that only clearly related pairs (damage/normalization issues) are kept; everything in 0.25–0.35 would be dropped as likely misaligned.
+
+Implementing (1) and (2) in `clean_word_level.py` and `clean_word_level_subset.py` would prevent the two example rows above from passing the filter.

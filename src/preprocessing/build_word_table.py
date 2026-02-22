@@ -9,7 +9,7 @@ Prerequisites:
   - data/oracc2cdli.db with tables: transliteration, finaldf (i.e. run load_to_db.py first)
 
 Outputs:
-  - Table word_level in data/oracc2cdli.db (columns: internal_id, id_text, tr_oracc, tr_cdli)
+  - Table word_level in data/oracc2cdli.db (columns: internal_id, id_text, id_word, tr_oracc, tr_cdli)
 
 Run before: export_word_level.py (to produce data/word_level.csv); EDA (word_level_eda.py)
 and tests (run_word_conversion_tests.py) use that CSV.
@@ -43,21 +43,21 @@ def _cdli_words_from_transliteration(trans: pd.DataFrame) -> pd.DataFrame:
 
 def _oracc_words_from_finaldf(final: pd.DataFrame) -> pd.DataFrame:
     """
-    One row per (id_text, word). Use 'form' as tr_oracc; preserve row order
+    One row per (id_text, word). Use 'form' as tr_oracc; preserve id_word and row order
     within each id_text as word order (word_rank).
     """
     final = final.dropna(subset=["form"]).copy()
-    final = final[["id_text", "form"]].copy()
+    final = final[["id_text", "form", "id_word"]].copy()
     final["word_rank"] = final.groupby("id_text").cumcount()
     final = final.rename(columns={"form": "tr_oracc"})
-    return final[["id_text", "word_rank", "tr_oracc"]]
+    return final[["id_text", "word_rank", "tr_oracc", "id_word"]]
 
 
 def build_word_table(db_path: Path | str | None = None) -> None:
     """
     Load transliteration and finaldf from DB, slice transliteration into words,
     align with finaldf words by (id_text, word position), and write table
-    word_level with columns: internal_id, id_text, tr_oracc, tr_cdli.
+    word_level with columns: internal_id, id_text, id_word, tr_oracc, tr_cdli.
     """
     db_path = Path(db_path) if db_path else DB_PATH
     if not db_path.exists():
@@ -68,7 +68,7 @@ def build_word_table(db_path: Path | str | None = None) -> None:
     with sqlite3.connect(db_path) as conn:
         print("Loading transliteration and finaldf...")
         trans = pd.read_sql("SELECT id_text, transliteration FROM transliteration", conn)
-        final = pd.read_sql("SELECT id_text, form FROM finaldf", conn)
+        final = pd.read_sql("SELECT id_text, form, id_word FROM finaldf", conn)
         print(f"  Transliteration: {len(trans):,} rows")
         print(f"  Finaldf: {len(final):,} rows")
 
@@ -82,7 +82,7 @@ def build_word_table(db_path: Path | str | None = None) -> None:
 
         print("Aligning on (id_text, word_rank)...")
         merged = cdli.merge(oracc, on=["id_text", "word_rank"], how="inner")
-        merged = merged[["id_text", "tr_oracc", "tr_cdli"]]
+        merged = merged[["id_text", "id_word", "tr_oracc", "tr_cdli"]]
         print(f"  Aligned word rows: {len(merged):,}")
 
         print("Assigning internal_id...")

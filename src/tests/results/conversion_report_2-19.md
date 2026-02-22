@@ -10,12 +10,12 @@
 
 ## Dataset tests (word_level.csv)
 
-- Total rows: 100,000
-- Rows with both tr_cdli and tr_oracc: 99,992
+- Total rows: 4,546,052
+- Rows with both tr_cdli and tr_oracc: 4,546,009
 
 ### CDLI → ORACC (vs dataset)
-- Passed: 56,748, Failed: 43,244, Skipped: 8
-- Accuracy (of compared): 56.75%
+- Passed: 2,281,284, Failed: 2,264,725, Skipped: 43
+- Accuracy (of compared): 50.18%
 
 Sample failures (first 50):
 1. row_id=23 input='ma-n' expected='ma-na' actual='ma-n'
@@ -40,8 +40,8 @@ Sample failures (first 50):
 20. row_id=160 input='ku3-babbar' expected='ma-na' actual='ku₃-babbar'
 
 ### ORACC → CDLI (vs dataset)
-- Passed: 58,610, Failed: 41,382, Skipped: 8
-- Accuracy (of compared): 58.61%
+- Passed: 2,374,751, Failed: 2,171,258, Skipped: 43
+- Accuracy (of compared): 52.24%
 
 Sample failures (first 50):
 1. row_id=23 input='ma-na' expected='ma-n' actual='ma-na'

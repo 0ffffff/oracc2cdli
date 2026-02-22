@@ -18,8 +18,8 @@ RESULTS_PATH = PROJECT_ROOT / "src" / "eda" / "results" / "word_level_eda.md"
 
 CHUNKSIZE = 100_000
 
-# Key columns for word_level: internal_id (numeric), id_text, tr_oracc, tr_cdli
-# We compute value_counts for id_text (top N) and match rate tr_oracc vs tr_cdli
+# Key columns for word_level: internal_id (numeric), id_text, id_word, tr_oracc, tr_cdli
+# We compute value_counts for id_text (top N), id_word nulls, and match rate tr_oracc vs tr_cdli
 
 
 def _validate_csv() -> None:
@@ -193,6 +193,14 @@ def _report(
         print(f"  {val}: {cnt:,} ({pct:.1f}%)")
     print(f"  Unique id_text values: {len(id_text_counts):,}")
 
+    # id_word: ORACC word-level identifier (one per row when present)
+    if "id_word" in columns and null_counts is not None and "id_word" in null_counts.index:
+        id_word_null = int(null_counts["id_word"])
+        print("\n" + "=" * 60)
+        print("ID_WORD (ORACC word-level identifier)")
+        print("=" * 60)
+        print(f"  Missing id_word: {id_word_null:,} ({100 * id_word_null / total_rows:.1f}%)" if total_rows else "  (no rows)")
+
     # Match rate: tr_oracc == tr_cdli
     print("\n" + "=" * 60)
     print("ORACC vs CDLI MATCH (tr_oracc == tr_cdli)")
@@ -248,7 +256,11 @@ def run_eda() -> None:
         print(f"Chunk size: {CHUNKSIZE:,} rows")
         print("Processing chunks...")
 
-        chunk_iter = pd.read_csv(CSV_PATH, chunksize=CHUNKSIZE, dtype={"id_text": str, "tr_oracc": str, "tr_cdli": str})
+        chunk_iter = pd.read_csv(
+            CSV_PATH,
+            chunksize=CHUNKSIZE,
+            dtype={"id_text": str, "id_word": str, "tr_oracc": str, "tr_cdli": str},
+        )
         for i, chunk in enumerate(chunk_iter):
             if head_df is None:
                 head_df = chunk.head(5)

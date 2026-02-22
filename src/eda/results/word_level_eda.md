@@ -1,7 +1,7 @@
 ============================================================
-CHUNKED EDA: word_level.csv
+CHUNKED EDA: word_level (CSV)
 ============================================================
-CSV: data/word_level.csv
+CSV: /Users/williamli/Developer/factgrid/data_harmonization/oracc2cdli/data/word_level.csv
 Chunk size: 100,000 rows
 Processing chunks...
   Chunk 1: 100,000 rows processed so far...
@@ -14,24 +14,25 @@ Processing chunks...
 BASIC INFO
 ============================================================
 Total rows: 4,546,052
-Columns: 4
-Column names: ['internal_id', 'id_text', 'tr_oracc', 'tr_cdli']
+Columns: 5
+Column names: ['internal_id', 'id_text', 'id_word', 'tr_oracc', 'tr_cdli']
 
 ============================================================
 FIRST 5 ROWS (table layout)
 ============================================================
-   internal_id  id_text   tr_oracc    tr_cdli
-0            1  P362523      1(aš)     1(asz)
-1            2  P362523         še        sze
-2            3  P362523        gur        gur
-3            4  P362523         ki         ki
-4            5  P362523  i₃-kal-la  i3-kal-la
+   internal_id  id_text      id_word   tr_oracc    tr_cdli
+0            1  P362523  P362523.3.1      1(aš)     1(asz)
+1            2  P362523  P362523.3.2         še        sze
+2            3  P362523  P362523.3.3        gur        gur
+3            4  P362523  P362523.4.1         ki         ki
+4            5  P362523  P362523.4.2  i₃-kal-la  i3-kal-la
 
 ============================================================
 DTYPES (from first chunk)
 ============================================================
 internal_id     int64
 id_text        object
+id_word        object
 tr_oracc       object
 tr_cdli        object
 
@@ -40,12 +41,14 @@ MISSING VALUES (total across all chunks)
 ============================================================
 internal_id     0
 id_text         0
+id_word         0
 tr_oracc        0
 tr_cdli        43
 
 As % of rows:
 internal_id    0.0
 id_text        0.0
+id_word        0.0
 tr_oracc       0.0
 tr_cdli        0.0
 
@@ -73,6 +76,11 @@ ID_TEXT: top 15 by row count (words per text)
   P423051: 2,324 (0.1%)
   P393782: 2,281 (0.1%)
   Unique id_text values: 93,209
+
+============================================================
+ID_WORD (ORACC word-level identifier)
+============================================================
+  Missing id_word: 0 (0.0%)
 
 ============================================================
 ORACC vs CDLI MATCH (tr_oracc == tr_cdli)

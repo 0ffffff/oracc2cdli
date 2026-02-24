@@ -25,7 +25,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import diff_match_patch as dmp_module
+from rapidfuzz.distance import Levenshtein
 
 # Project root
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -55,20 +55,14 @@ SIM_LIKELY_MISALIGNED = 0.30
 # Garbage tokens to filter out (rows containing these in either column)
 GARBAGE_TOKENS = ["$", "($", "$)", "($)"]
 
-# Reuse a single dmp instance for similarity (thread-safe for diff_main + diff_levenshtein)
-_dmp = dmp_module.diff_match_patch()
-
 
 def _char_similarity(a: str, b: str) -> float:
-    """Return similarity in [0, 1] using diff_match_patch Levenshtein (faster than SequenceMatcher)."""
+    """Return similarity in [0, 1] using rapidfuzz Levenshtein normalized_similarity."""
     if not a and not b:
         return 1.0
     if not a or not b:
         return 0.0
-    diffs = _dmp.diff_main(a, b)
-    lev = _dmp.diff_levenshtein(diffs)
-    max_len = max(len(a), len(b))
-    return 1.0 - (lev / max_len)
+    return Levenshtein.normalized_similarity(a, b)
 
 
 def _classify_row(tr_cdli: str, tr_oracc: str) -> tuple[float, float, str]:

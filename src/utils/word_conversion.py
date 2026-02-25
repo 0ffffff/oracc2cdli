@@ -14,6 +14,12 @@ special consonants, disz for diš. ORACC (Extended ATF) uses Unicode: ₀-₉, �
 Determinatives: CDLI uses {d}, {ki}, {x}; ORACC may use ⁼. Ellipsis: CDLI ... ; ORACC ….
 
 Converts a single word at a time. For line-level conversion use utils.py.
+
+Performance notes (2026-02-24):
+  - Character mappings are loaded from CSV once and cached at module level.
+  - _apply_mapping uses a single-pass compiled regex instead of N×str.replace loops.
+  - The subscript-digit regex is pre-compiled.
+  - word_cdli_to_oracc pre-computes its non-digit sub-mapping and caches the regex.
 """
 
 from __future__ import annotations
@@ -36,49 +42,91 @@ DETERMINATIVE_KI_SUFFIX = "{ki}"
 # Subscript numerals (Unicode) for sign indices: 0->₀, 1->₁, ...
 _SUBSCRIPT_DIGITS = "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089"
 
+# Pre-built str.translate table: ASCII digit -> Unicode subscript digit.
+_DIGIT_TO_SUBSCRIPT_TABLE = str.maketrans("0123456789", _SUBSCRIPT_DIGITS)
+
 
 def _digits_to_subscript(s: str) -> str:
     """Convert a string of ASCII digits to Unicode subscript digits (e.g. '10' -> '₁₀')."""
-    return "".join(_SUBSCRIPT_DIGITS[int(c)] for c in s if c.isdigit())
+    return s.translate(_DIGIT_TO_SUBSCRIPT_TABLE)
 
 
 # -----------------------------------------------------------------------------
-# Character mapping (delegate to utils to avoid duplicating CSV path logic)
+# Character mapping – loaded once and cached at module level
 # -----------------------------------------------------------------------------
 
-def _get_oracc_to_cdli_mapping(csv_path: Optional[str] = None):
-    """Load ORACC -> CDLI character mapping from reference CSV."""
-    from .utils import load_character_mapping
-    return load_character_mapping(csv_path) if csv_path else load_character_mapping()
+_CACHED_ORACC_TO_CDLI: dict[str, str] | None = None
+_CACHED_CDLI_TO_ORACC: dict[str, str] | None = None
 
 
-def _get_cdli_to_oracc_mapping(csv_path: Optional[str] = None):
-    """Load CDLI -> ORACC character mapping from reference CSV."""
-    from .utils import load_reverse_character_mapping
-    return load_reverse_character_mapping(csv_path) if csv_path else load_reverse_character_mapping()
+def _get_oracc_to_cdli_mapping(csv_path: Optional[str] = None) -> dict[str, str]:
+    """Return ORACC -> CDLI character mapping (cached after first load)."""
+    global _CACHED_ORACC_TO_CDLI
+    if csv_path is not None:
+        # Explicit path: always load fresh (rare / test use).
+        from .utils import load_character_mapping
+        return load_character_mapping(csv_path)
+    if _CACHED_ORACC_TO_CDLI is None:
+        from .utils import load_character_mapping
+        _CACHED_ORACC_TO_CDLI = load_character_mapping()
+    return _CACHED_ORACC_TO_CDLI
+
+
+def _get_cdli_to_oracc_mapping(csv_path: Optional[str] = None) -> dict[str, str]:
+    """Return CDLI -> ORACC character mapping (cached after first load)."""
+    global _CACHED_CDLI_TO_ORACC
+    if csv_path is not None:
+        from .utils import load_reverse_character_mapping
+        return load_reverse_character_mapping(csv_path)
+    if _CACHED_CDLI_TO_ORACC is None:
+        from .utils import load_reverse_character_mapping
+        _CACHED_CDLI_TO_ORACC = load_reverse_character_mapping()
+    return _CACHED_CDLI_TO_ORACC
+
+
+# -----------------------------------------------------------------------------
+# Single-pass regex replacement (replaces old N×str.replace loop)
+# -----------------------------------------------------------------------------
+
+# Cache: mapping id → (compiled_pattern, lookup_dict)
+_REGEX_CACHE: dict[int, tuple[re.Pattern, dict[str, str]]] = {}
+
+
+def _build_replacement_regex(mapping: dict[str, str]) -> tuple[re.Pattern, dict[str, str]]:
+    """Build a compiled regex that matches any mapping key, longest-first."""
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(k) for k in keys))
+    return pattern, mapping
 
 
 def _apply_mapping(
     word: str,
     mapping: dict[str, str],
     *,
-    sort_keys_by_length_desc: bool = True,
+    sort_keys_by_length_desc: bool = True,  # kept for API compat; ignored (regex always longest-first)
 ) -> str:
     """
-    Replace each key in mapping with its value in the string.
+    Replace each key in *mapping* with its value in *word* using a single-pass
+    compiled regex.  The regex is built once per unique mapping dict (keyed by
+    ``id(mapping)``) and cached for the lifetime of the process.
 
-    Keys are applied in descending length order so that longer sequences
-    are replaced first (e.g. 'disz' before 's', and 's,' before 's').
-    This avoids shorter tokens incorrectly consuming parts of multi-char
-    signs (e.g. 'sz' vs 's').
+    Keys are matched longest-first so that multi-char sequences like 'disz' or
+    'sz' are consumed before shorter overlapping keys like 's'.
     """
     if not word or not mapping:
         return word
-    keys = sorted(mapping.keys(), key=len, reverse=True) if sort_keys_by_length_desc else mapping.keys()
-    result = word
-    for key in keys:
-        result = result.replace(key, mapping[key])
-    return result
+    cache_key = id(mapping)
+    if cache_key not in _REGEX_CACHE:
+        _REGEX_CACHE[cache_key] = _build_replacement_regex(mapping)
+    pattern, lookup = _REGEX_CACHE[cache_key]
+    return pattern.sub(lambda m: lookup[m.group()], word)
+
+
+# -----------------------------------------------------------------------------
+# Pre-compiled subscript-digit regex
+# -----------------------------------------------------------------------------
+
+_SUBSCRIPT_RE = re.compile(r"([a-zA-Z,'])(\d+)")
 
 
 def _cdli_digits_to_oracc_subscripts(word: str) -> str:
@@ -91,10 +139,8 @@ def _cdli_digits_to_oracc_subscripts(word: str) -> str:
     sign-internal character (e.g. comma in s,). Regex: ([a-zA-Z,'])(\\d+) matches
     (letter/sign)(digit run); we replace the digit run with subscript form.
     """
-    # Match one or more sign-name chars (letter or comma) then one or more digits.
-    return re.sub(
-        r"([a-zA-Z,'])(\d+)",
-        lambda m: m.group(1) + _digits_to_subscript(m.group(2)),
+    return _SUBSCRIPT_RE.sub(
+        lambda m: m.group(1) + m.group(2).translate(_DIGIT_TO_SUBSCRIPT_TABLE),
         word,
     )
 
@@ -102,6 +148,9 @@ def _cdli_digits_to_oracc_subscripts(word: str) -> str:
 # -----------------------------------------------------------------------------
 # Normalization helpers (determinatives, ellipsis, underscores)
 # -----------------------------------------------------------------------------
+
+_DETERMINATIVE_RE = re.compile(r"\{([^}]*)\}")
+
 
 def _normalize_determinatives_cdli_to_oracc(word: str) -> str:
     """
@@ -118,8 +167,7 @@ def _normalize_determinatives_cdli_to_oracc(word: str) -> str:
     word = word.replace(DETERMINATIVE_D_PREFIX, "d⁼")
     word = word.replace(DETERMINATIVE_KI_SUFFIX, "⁼ki")
     # Generic: {foo} -> ⁼foo (replace opening brace with ⁼, remove closing brace).
-    # Regex: \{ matches literal '{', ([^}]*) captures non-'}' chars, \} matches '}'.
-    word = re.sub(r"\{([^}]*)\}", r"⁼\1", word)
+    word = _DETERMINATIVE_RE.sub(r"⁼\1", word)
     return word
 
 
@@ -135,6 +183,25 @@ def _normalize_ellipsis_to_cdli(word: str) -> str:
     if ORACC_ELLIPSIS not in word:
         return word
     return word.replace(ORACC_ELLIPSIS, CDLI_ELLIPSIS)
+
+
+# -----------------------------------------------------------------------------
+# Pre-computed non-digit sub-mapping for word_cdli_to_oracc
+# (avoids rebuilding the dict-comprehension on every call)
+# -----------------------------------------------------------------------------
+
+_CACHED_CDLI_TO_ORACC_NO_DIGITS: dict[str, str] | None = None
+
+
+def _get_cdli_to_oracc_no_digits() -> dict[str, str]:
+    """Return the CDLI->ORACC mapping with single-digit keys removed (cached)."""
+    global _CACHED_CDLI_TO_ORACC_NO_DIGITS
+    if _CACHED_CDLI_TO_ORACC_NO_DIGITS is None:
+        full = _get_cdli_to_oracc_mapping()
+        _CACHED_CDLI_TO_ORACC_NO_DIGITS = {
+            k: v for k, v in full.items() if not (len(k) == 1 and k.isdigit())
+        }
+    return _CACHED_CDLI_TO_ORACC_NO_DIGITS
 
 
 # -----------------------------------------------------------------------------
@@ -244,9 +311,6 @@ def word_cdli_to_oracc(
     if not word:
         return word
 
-    if mapping is None:
-        mapping = _get_cdli_to_oracc_mapping()
-
     if strip_underscores:
         word = word.replace("_", "")
 
@@ -256,9 +320,12 @@ def word_cdli_to_oracc(
     if normalize_ellipsis:
         word = _normalize_ellipsis_to_oracc(word)
 
-    # Apply non-digit mappings first (disz, sz, s,, t,, h,, j, s', ', x, X).
-    # Exclude single digits 0-9 so numerals like 1(asz) stay as "1", not "₁".
-    non_digit_mapping = {k: v for k, v in mapping.items() if not (len(k) == 1 and k.isdigit())}
+    # Use caller-supplied mapping or the cached non-digit sub-mapping.
+    if mapping is not None:
+        non_digit_mapping = {k: v for k, v in mapping.items() if not (len(k) == 1 and k.isdigit())}
+    else:
+        non_digit_mapping = _get_cdli_to_oracc_no_digits()
+
     word = _apply_mapping(word, non_digit_mapping)
 
     # Convert digits to subscripts only when part of a sign (e.g. i3 -> i₃, du10 -> du₁₀).

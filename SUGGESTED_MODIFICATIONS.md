@@ -28,6 +28,8 @@ Optional restructuring ideas. No code or directories have been changed; this fil
 
 **Result:** Conversion (CLI and library) works out of the box after clone without requiring any files in `data/`. Pipeline scripts (load_to_db, build_word_table, export_word_level, EDA, tests that use `word_level.csv`) continue to read/write `data/` as today.
 
+> **Update (2026-02-24):** The performance cost of reading the mapping CSV has been largely mitigated: `word_conversion.py` now caches both character mappings at module level after the first load, so the CSV is read at most once per process (not once per word). Moving the CSV to a committed location is still recommended for deployment/portability reasons, but it is no longer a performance concern.
+
 ---
 
 ## 2. Naming and single-purpose modules

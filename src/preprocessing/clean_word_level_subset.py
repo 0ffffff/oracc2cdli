@@ -28,6 +28,7 @@ from src.preprocessing.clean_word_level import (
     CHUNK_SIZE,
     INPUT_CSV,
     MAX_WORKERS,
+    _merge_results,
     _process_chunk,
     _split_pairs,
 )
@@ -66,79 +67,81 @@ def clean_word_level_subset(
     total_rows = 0
     kept_rows = 0
     dropped_rows = 0
-    dropped_by_reason = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
-    kept_by_label = {"exact": 0, "high": 0, "conversion_issue": 0}
+    dropped_by_reason: dict[str, int] = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
+    kept_by_label: dict[str, int] = {"exact": 0, "high": 0, "conversion_issue": 0}
 
     n_workers = max_workers if max_workers is not None else max(1, (os.cpu_count() or 2) - 1)
     first_chunk = True
     chunk_num = 0
     rows_accumulated = 0
 
+    # Create the pool once and reuse across all chunks.
+    pool = ProcessPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
+
     print("[1/2] Loading, classifying, and writing one chunk at a time (streaming, max_rows cap)...", flush=True)
-    for chunk in pd.read_csv(
-        input_csv,
-        chunksize=chunk_size,
-        dtype={"internal_id": "Int64", "id_text": str, "tr_oracc": str, "tr_cdli": str},
-    ):
-        chunk_num += 1
-        chunk = chunk.dropna(subset=["tr_cdli", "tr_oracc"])
-        chunk["tr_cdli"] = chunk["tr_cdli"].astype(str).str.strip()
-        chunk["tr_oracc"] = chunk["tr_oracc"].astype(str).str.strip()
-        chunk = chunk[chunk["tr_cdli"].astype(bool) & chunk["tr_oracc"].astype(bool)]
+    try:
+        for chunk in pd.read_csv(
+            input_csv,
+            chunksize=chunk_size,
+            dtype={"internal_id": "Int64", "id_text": str, "tr_oracc": str, "tr_cdli": str},
+        ):
+            chunk_num += 1
+            chunk = chunk.dropna(subset=["tr_cdli", "tr_oracc"])
+            chunk["tr_cdli"] = chunk["tr_cdli"].astype(str).str.strip()
+            chunk["tr_oracc"] = chunk["tr_oracc"].astype(str).str.strip()
+            chunk = chunk[chunk["tr_cdli"].astype(bool) & chunk["tr_oracc"].astype(bool)]
 
-        mask_no_garbage = ~(
-            chunk["tr_cdli"].str.contains("$", regex=False)
-            | chunk["tr_oracc"].str.contains("$", regex=False)
-        )
-        chunk = chunk[mask_no_garbage]
+            mask_no_garbage = ~(
+                chunk["tr_cdli"].str.contains("$", regex=False)
+                | chunk["tr_oracc"].str.contains("$", regex=False)
+            )
+            chunk = chunk[mask_no_garbage]
 
-        # Trim chunk to not exceed max_rows
-        if rows_accumulated + len(chunk) > max_rows:
-            take = max_rows - rows_accumulated
-            chunk = chunk.iloc[:take]
+            # Trim chunk to not exceed max_rows
+            if rows_accumulated + len(chunk) > max_rows:
+                take = max_rows - rows_accumulated
+                chunk = chunk.iloc[:take]
 
-        pairs = list(zip(chunk["tr_cdli"].tolist(), chunk["tr_oracc"].tolist()))
-        n_pairs = len(pairs)
+            pairs = list(zip(chunk["tr_cdli"].tolist(), chunk["tr_oracc"].tolist()))
+            n_pairs = len(pairs)
 
-        chunk_start = time.perf_counter()
-        if n_workers <= 1 or n_pairs < n_workers:
-            keep_mask, d_drop, d_keep = _process_chunk(pairs)
-        else:
-            parts = _split_pairs(pairs, n_workers)
-            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            chunk_start = time.perf_counter()
+            if pool is None or n_pairs < n_workers:
+                keep_mask, d_drop, d_keep = _process_chunk(pairs)
+            else:
+                parts = _split_pairs(pairs, n_workers)
                 futures = [pool.submit(_process_chunk, part) for part in parts]
                 results = [f.result() for f in futures]
-            keep_mask = []
-            d_drop = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
-            d_keep = {"exact": 0, "high": 0, "conversion_issue": 0}
-            for _mask, _drop, _keep in results:
-                keep_mask.extend(_mask)
-                for k, v in _drop.items():
-                    d_drop[k] = d_drop.get(k, 0) + v
-                for k, v in _keep.items():
-                    d_keep[k] = d_keep.get(k, 0) + v
+                keep_mask, d_drop, d_keep = _merge_results(results)
 
-        chunk_elapsed = time.perf_counter() - chunk_start
-        total_rows += len(chunk)
-        kept_rows += sum(keep_mask)
-        dropped_rows += len(keep_mask) - sum(keep_mask)
-        for k, v in d_drop.items():
-            dropped_by_reason[k] = dropped_by_reason.get(k, 0) + v
-        for k, v in d_keep.items():
-            kept_by_label[k] = kept_by_label.get(k, 0) + v
+            chunk_elapsed = time.perf_counter() - chunk_start
 
-        rows_accumulated += len(chunk)
-        pct = 100 * rows_accumulated / max_rows if max_rows else 0
-        print(f"      Chunk {chunk_num}: {len(pairs):,} rows in {chunk_elapsed:.1f}s (total {rows_accumulated:,} / {max_rows:,}, {pct:.0f}%)", flush=True)
-        chunk_cleaned = chunk[keep_mask]
-        if len(chunk_cleaned) > 0:
-            chunk_cleaned.to_csv(
-                output_csv, mode="w" if first_chunk else "a", header=first_chunk, index=False
-            )
-            first_chunk = False
+            # Derive counts from accumulators (avoids iterating keep_mask again)
+            chunk_kept = sum(d_keep.values())
+            chunk_dropped = sum(d_drop.values())
+            total_rows += len(chunk)
+            kept_rows += chunk_kept
+            dropped_rows += chunk_dropped
+            for k, v in d_drop.items():
+                dropped_by_reason[k] = dropped_by_reason.get(k, 0) + v
+            for k, v in d_keep.items():
+                kept_by_label[k] = kept_by_label.get(k, 0) + v
 
-        if rows_accumulated >= max_rows:
-            break
+            rows_accumulated += len(chunk)
+            pct = 100 * rows_accumulated / max_rows if max_rows else 0
+            print(f"      Chunk {chunk_num}: {len(pairs):,} rows in {chunk_elapsed:.1f}s (total {rows_accumulated:,} / {max_rows:,}, {pct:.0f}%)", flush=True)
+            chunk_cleaned = chunk[keep_mask]
+            if len(chunk_cleaned) > 0:
+                chunk_cleaned.to_csv(
+                    output_csv, mode="w" if first_chunk else "a", header=first_chunk, index=False
+                )
+                first_chunk = False
+
+            if rows_accumulated >= max_rows:
+                break
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False)
 
     print("[2/2] Done.", flush=True)
     elapsed = time.perf_counter() - t0

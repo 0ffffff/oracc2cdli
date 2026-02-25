@@ -19,6 +19,8 @@ This document explains the results of the word-level dataset quality analysis (`
 
 Thresholds used: `SIM_EXACT=1`, `SIM_HIGH=0.95`, `SIM_LIKELY_MISALIGNED=0.25`, `SIM_VERY_LOW=0.10`.
 
+> **Note (2026-02-24):** The analysis script (`analyze_dataset_quality.py`) still uses `SIM_LIKELY_MISALIGNED=0.25` for classification reporting. The cleaning script (`clean_word_level.py`) has raised its threshold to **0.30** for filtering, meaning rows with similarity in [0.25, 0.30) are now **dropped** during cleaning even though they appear as "conversion_issue" in the analysis output.
+
 ---
 
 ## 2. Summary of findings (from `analysis_summary.json`)
@@ -193,3 +195,19 @@ About 2,600–2,650 rows have similarity below 10% in one direction. These are a
 - **Input data:** `data/word_level.csv` (from `load_to_db` → `build_word_table` → `export_word_level`)
 - **Results:** `src/preprocessing/dataset_quality_results/analysis_summary.json`
 - **Conversion:** `src/utils/word_conversion.py` (word-level); `src/utils/utils.py` (line-level)
+- **Cleaning:** `src/preprocessing/clean_word_level.py` (full dataset); `src/preprocessing/clean_word_level_subset.py` (benchmark subset)
+- **Cleaning filter analysis:** `src/preprocessing/dataset_quality_results/cleaning_filter_analysis.md`
+
+---
+
+## 7. Performance notes (2026-02-24)
+
+The cleaning pipeline (`clean_word_level.py`) was optimized for the full 4.5M-row dataset:
+
+- Character mappings in `word_conversion.py` are now loaded from CSV **once** and cached at module level (previously re-read on every word conversion call).
+- `_apply_mapping()` uses a single-pass compiled regex instead of N iterative `str.replace()` loops.
+- The `ProcessPoolExecutor` is created once and reused across all chunks (previously re-created per chunk).
+- Redundant `.strip()` calls and per-row `$` checks were removed from the classification hot path; these are now handled once in vectorized chunk preprocessing.
+- The misaligned threshold (`SIM_LIKELY_MISALIGNED`) was raised from 0.25 to **0.30**.
+
+Benchmark: 10,000 rows in 1.4s classification time (1.8s total). Estimated full-dataset time: ~10-14 minutes.

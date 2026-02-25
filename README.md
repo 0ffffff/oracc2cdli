@@ -29,14 +29,14 @@ oracc2cdli/
     ├── utils/
     │   ├── __init__.py               # Re-exports conversion, mapping, word_conversion, validate
     │   ├── utils.py                  # Character mapping + line-level conversion (ORACC↔CDLI)
-    │   ├── word_conversion.py        # Atomic word-level conversion (ORACC↔CDLI)
+    │   ├── word_conversion.py        # Atomic word-level conversion (ORACC↔CDLI); cached mappings, compiled regex
     │   └── validate.py               # Clean CDLI lines; compare predicted vs reference file
     ├── preprocessing/
     │   ├── __init__.py
     │   ├── load_to_db.py             # Load transliteration.csv + finaldf.csv → SQLite
     │   ├── build_word_table.py       # Build word-level table (id_text, tr_oracc, tr_cdli) in DB
     │   ├── export_word_level.py      # Export word_level table from DB → data/word_level.csv
-    │   ├── clean_word_level.py       # Filter word_level.csv → data/word_level_cleaned.csv (drop misaligned/garbage)
+    │   ├── clean_word_level.py       # Filter word_level.csv → data/word_level_cleaned.csv (optimized for ~4.5M rows)
     │   ├── clean_word_level_subset.py # Same as clean_word_level on first N rows → word_level_cleaned_subset.csv
     │   ├── analyze_dataset_quality.py # Sample word_level.csv; classify misalignment vs conversion; summary + JSON
     │   ├── preprocess_old.py         # [Legacy] Merge/dedupe transliteration+finaldf; superseded by build_word_table
@@ -68,12 +68,12 @@ Script headers and roles (descriptions match each file’s module docstring):
 | **src/oracc_to_cdli.py** | CLI: convert ORACC → CDLI, or clean an input file (strip lines). Subcommands: `convert`, `clean`. Uses `src.utils` for mapping and line conversion. |
 | **src/cdli_to_oracc.py** | CLI: convert CDLI → ORACC, or clean an input file. Subcommands: `convert`, `clean`. Uses `src.utils` for reverse mapping and line conversion. |
 | **src/utils/utils.py** | Character mapping (load_character_mapping, load_reverse_character_mapping from reference CSV); line-level conversion (convert_line_oracc_to_cdli, convert_line_cdli_to_oracc); validate_conversion for CSV accuracy. For single-word conversion use word_conversion. |
-| **src/utils/word_conversion.py** | Atomic word-level conversion between CDLI and ORACC (word_oracc_to_cdli, word_cdli_to_oracc). Handles subscripts, determinatives, ellipsis. For line-level conversion use utils.py. |
+| **src/utils/word_conversion.py** | Atomic word-level conversion between CDLI and ORACC (word_oracc_to_cdli, word_cdli_to_oracc). Handles subscripts, determinatives, ellipsis. Character mappings are loaded once and cached; replacement uses single-pass compiled regex. For line-level conversion use utils.py. |
 | **src/utils/validate.py** | clean_line_cdli: normalise one line to CDLI_clean (strip markers, determinatives). validate: compare predicted vs reference file by line ID; CLI entry point. |
 | **src/preprocessing/load_to_db.py** | Load `transliteration.csv` and `finaldf.csv` (chunked) into SQLite `data/oracc2cdli.db`. Run from project root or as module. |
 | **src/preprocessing/build_word_table.py** | Build word-level table (id_text, tr_oracc, tr_cdli) from transliteration + finaldf; write table `word_level` to same DB. Run after load_to_db. |
 | **src/preprocessing/export_word_level.py** | Export the `word_level` table from SQLite to `data/word_level.csv`. Requires oracc2cdli.db with table `word_level`. |
-| **src/preprocessing/clean_word_level.py** | Clean `word_level.csv`: filter out misaligned rows and garbage tokens; output `data/word_level_cleaned.csv`. Run after export_word_level. Uses rapidfuzz for similarity; keeps exact/high/conversion_issue, drops likely_misaligned and garbage. |
+| **src/preprocessing/clean_word_level.py** | Clean `word_level.csv`: filter out misaligned rows and garbage tokens; output `data/word_level_cleaned.csv`. Run after export_word_level. Uses rapidfuzz for similarity; keeps exact/high/conversion_issue, drops likely_misaligned and garbage. Optimized for large datasets (~4.5M rows): reuses a single `ProcessPoolExecutor`, strips and filters once per chunk. |
 | **src/preprocessing/clean_word_level_subset.py** | Same logic as clean_word_level on first N rows only; output `data/word_level_cleaned_subset.csv`. For benchmarking/timing; delete output when done. |
 | **src/preprocessing/analyze_dataset_quality.py** | Sample `word_level.csv`, run CDLI↔ORACC conversion, classify rows (exact / high / conversion_issue / likely_misaligned). Writes summary and optional JSON to `dataset_quality_results/`. Run from project root. |
 | **src/preprocessing/preprocess_old.py** | [Legacy] Dedupe transliteration/finaldf, join on id_text, write merged table. Superseded by build_word_table. |
@@ -83,6 +83,30 @@ Script headers and roles (descriptions match each file’s module docstring):
 | **src/tests/test_word_conversion.py** | Reusable test API: unit tests (empty, None, malformed, edge cases, round-trip) and chunked dataset tests on word_level CSV. Returns result dicts; use with run_word_conversion_tests or your own flow. |
 | **src/tests/run_word_conversion_tests.py** | Runner: runs unit tests and dataset tests (chunked); optional `--report <path>` to write Markdown report (e.g. `results/conversion_report_2-19.md`). Supports `--csv`, `--chunk`, `--max-rows`, `--no-roundtrip`, `--roundtrip-sample`. Run from project root. |
 | **examples/example.py** | Example: load mapping from reference CSV, read ORACC file, convert lines to CDLI with utils, save to file. No CLI arguments. |
+
+---
+
+## Performance optimizations (2026-02-24)
+
+The cleaning pipeline (`clean_word_level.py`) processes ~4.5 million rows. Several optimizations were applied to `word_conversion.py` and the cleaning scripts to reduce total runtime:
+
+- **Cached character mappings** — `load_character_mapping()` / `load_reverse_character_mapping()` previously re-read and re-parsed the reference CSV on every word conversion call (~9M+ disk reads for a full run). Mappings are now loaded once and cached at module level in `word_conversion.py`. This was the single largest bottleneck.
+- **Single-pass compiled regex in `_apply_mapping()`** — Replaced the loop of `str.replace()` calls (one per mapping key, ~25 full-string scans per word) with a single compiled `re.Pattern` that matches all keys longest-first. The regex is built once per unique mapping dict and cached.
+- **Pre-compiled regexes** — The subscript-digit regex and the determinative regex are compiled once at module level instead of recompiling on every function call.
+- **`str.translate()` for digit→subscript** — Replaced a Python-level generator with a C-level `str.maketrans` / `str.translate` table for converting ASCII digits to Unicode subscript digits.
+- **Pre-computed non-digit sub-mapping** — `word_cdli_to_oracc` previously rebuilt a filtered dict comprehension on every call; this is now cached.
+- **Removed redundant `.strip()` calls** — Input strings were stripped in 4 separate places (chunk preprocessing, `_classify_pair`, `_classify_row`, and inside each `word_*` function). Stripping now happens once in the vectorized chunk preprocessing step.
+- **Removed redundant `$` garbage check** — The per-row `"$" in tr_cdli` check in `_classify_pair` was redundant with the vectorized `str.contains("$")` filter applied earlier in the chunk pipeline.
+- **Reused `ProcessPoolExecutor`** — The pool was previously created and destroyed for every chunk (~45 times for the full dataset). It is now created once and reused across all chunks.
+- **Derived counts from accumulators** — Replaced `sum(keep_mask)` (iterating a Python list of 100K booleans) with `sum(d_keep.values())` (summing 3 integers).
+
+### Benchmark
+
+| Metric | Value |
+|--------|-------|
+| Subset (10,000 rows) classify time | 1.4 s |
+| Subset (10,000 rows) total time | 1.8 s |
+| Full dataset (4,546,052 rows) estimated | ~10–14 min |
 
 ---
 

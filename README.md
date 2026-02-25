@@ -44,11 +44,13 @@ oracc2cdli/
     │       ├── dataset_quality_findings.md   # Narrative findings on bad data / misalignment
     │       ├── cleaning_filter_analysis.md   # Analysis of cleaning filter impact
     │       ├── dataset_quality_2026-02-19.md # Dated quality report
+    │       ├── dataset_quality_2026-02-24.md # Dated quality report
     │       └── analysis_summary.json         # Summary stats for tooling
     ├── eda/
     │   ├── transliteration_eda.py    # EDA for transliteration.csv → results/transliteration_eda.md
     │   ├── finaldf_eda.py            # Chunked EDA for finaldf.csv → results/finaldf_eda.md
     │   ├── word_level_eda.py         # Chunked EDA for word_level.csv → results/word_level_eda.md
+    │   ├── word_level_cleaned_eda.py # Chunked EDA for word_level_cleaned.csv → results/word_level_cleaned_eda.md
     │   └── results/                  # Generated EDA reports (*.md)
     └── tests/
         ├── __init__.py
@@ -80,6 +82,7 @@ Script headers and roles (descriptions match each file’s module docstring):
 | **src/eda/transliteration_eda.py** | EDA for `transliteration.csv` (full load): basic info, dtypes, missing, id_text/word counts, special notation. Writes `src/eda/results/transliteration_eda.md`. |
 | **src/eda/finaldf_eda.py** | Chunked EDA for `finaldf.csv`: basic info, dtypes, missing, numeric stats, value counts. Writes `src/eda/results/finaldf_eda.md`. |
 | **src/eda/word_level_eda.py** | Chunked EDA for `word_level.csv`: basic info, dtypes, missing, key stats (e.g. tr_oracc vs tr_cdli match). Writes `src/eda/results/word_level_eda.md`. |
+| **src/eda/word_level_cleaned_eda.py** | Chunked EDA for `word_level_cleaned.csv`: basic info, dtypes, missing, key stats, comparison against uncleaned `word_level.csv`. Writes `src/eda/results/word_level_cleaned_eda.md`. |
 | **src/tests/test_word_conversion.py** | Reusable test API: unit tests (empty, None, malformed, edge cases, round-trip) and chunked dataset tests on word_level CSV. Returns result dicts; use with run_word_conversion_tests or your own flow. |
 | **src/tests/run_word_conversion_tests.py** | Runner: runs unit tests and dataset tests (chunked); optional `--report <path>` to write Markdown report (e.g. `results/conversion_report_2-19.md`). Supports `--csv`, `--chunk`, `--max-rows`, `--no-roundtrip`, `--roundtrip-sample`. Run from project root. |
 | **examples/example.py** | Example: load mapping from reference CSV, read ORACC file, convert lines to CDLI with utils, save to file. No CLI arguments. |
@@ -152,7 +155,7 @@ Compares predicted lines to the reference CDLI file (by line ID) and prints matc
 After building and exporting the word-level table:
 
 1. **Analyze quality** (sample-based): `python3 src/preprocessing/analyze_dataset_quality.py`  
-   Writes summary and optional JSON to `src/preprocessing/dataset_quality_results/` (e.g. `dataset_quality_findings.md`, `dataset_quality_2026-02-19.md`, `analysis_summary.json`).
+   Writes summary and optional JSON to `src/preprocessing/dataset_quality_results/` (e.g. `dataset_quality_findings.md`, `dataset_quality_2026-02-24.md`, `analysis_summary.json`).
 
 2. **Clean full dataset**: `python3 src/preprocessing/clean_word_level.py`  
    Reads `data/word_level.csv`, filters misaligned rows and garbage tokens, writes `data/word_level_cleaned.csv`.

@@ -1,7 +1,7 @@
 [project]
 name = "oracc2cdli"
 version = "0.1.0"
-description = "Add your description here"
+description = "Convert between ORACC and CDLI cuneiform transliteration formats"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

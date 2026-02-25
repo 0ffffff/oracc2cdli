@@ -11,8 +11,8 @@ Outputs:
   - data/word_level_cleaned.csv (filtered dataset)
 
 Filtering criteria:
-  - KEEP: exact matches, high similarity (≥95%), conversion_issue (25-95% similarity)
-  - DROP: likely_misaligned (<25% similarity), rows with garbage tokens ($, etc.)
+  - KEEP: exact matches, high similarity (≥95%), conversion_issue (30-95% similarity)
+  - DROP: likely_misaligned (<30% similarity), rows with garbage tokens ($, etc.)
 
 Run before: Use word_level_cleaned.csv for conversion training/evaluation instead of word_level.csv.
 

@@ -3,7 +3,7 @@ Analyze word_level.csv for misalignment vs conversion failures.
 
 Samples rows, runs CDLI<->ORACC conversion, and computes character-level
 similarity (SequenceMatcher.ratio) between converted output and the other
-column. Low similarity (e.g. < 20%) suggests the row is misaligned (different
+column. Low similarity (e.g. < 30%) suggests the row is misaligned (different
 words in the two columns), not a conversion bug. High similarity but not
 exact suggests conversion or normalization gaps.
 
@@ -182,8 +182,8 @@ def run_analysis(
         "very_low_similarity": {
             "sim_c2o_below_10pct": very_low_c2o,
             "sim_o2c_below_10pct": very_low_o2c,
-            "sim_c2o_below_25pct": low_c2o,
-            "sim_o2c_below_25pct": low_o2c,
+            "sim_c2o_below_30pct": low_c2o,
+            "sim_o2c_below_30pct": low_o2c,
         },
         "thresholds": {
             "SIM_EXACT": SIM_EXACT,
@@ -234,8 +234,8 @@ def main() -> None:
     lines.extend([
         f"- sim(CDLI→ORACC, tr_oracc) < 10%: {vl['sim_c2o_below_10pct']:,}",
         f"- sim(ORACC→CDLI, tr_cdli) < 10%: {vl['sim_o2c_below_10pct']:,}",
-        f"- sim(CDLI→ORACC, tr_oracc) < 25%: {vl['sim_c2o_below_25pct']:,}",
-        f"- sim(ORACC→CDLI, tr_cdli) < 25%: {vl['sim_o2c_below_25pct']:,}",
+        f"- sim(CDLI→ORACC, tr_oracc) < 30%: {vl['sim_c2o_below_30pct']:,}",
+        f"- sim(ORACC→CDLI, tr_cdli) < 30%: {vl['sim_o2c_below_30pct']:,}",
         "",
     ])
     report_text = "\n".join(lines)
@@ -256,8 +256,8 @@ def main() -> None:
     print("Likely misaligned (similarity below threshold):")
     print(f"  sim(CDLI→ORACC, tr_oracc) < 10%: {vl['sim_c2o_below_10pct']:,}")
     print(f"  sim(ORACC→CDLI, tr_cdli) < 10%:  {vl['sim_o2c_below_10pct']:,}")
-    print(f"  sim(CDLI→ORACC, tr_oracc) < 25%: {vl['sim_c2o_below_25pct']:,}")
-    print(f"  sim(ORACC→CDLI, tr_cdli) < 25%:  {vl['sim_o2c_below_25pct']:,}")
+    print(f"  sim(CDLI→ORACC, tr_oracc) < 30%: {vl['sim_c2o_below_30pct']:,}")
+    print(f"  sim(ORACC→CDLI, tr_cdli) < 30%:  {vl['sim_o2c_below_30pct']:,}")
 
     results_dir = _SCRIPT_DIR / "dataset_quality_results"
     results_dir.mkdir(exist_ok=True)

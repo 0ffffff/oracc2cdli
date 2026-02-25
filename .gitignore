@@ -16,6 +16,7 @@ __pycache__/
 data/transliteration.csv
 data/finaldf.csv
 data/word_level.csv
+data/word_level_cleaned.csv
 data/word_level_cleaned_subset.csv
 data/oldassyrian-lines.csv
 data/reference/transliteration.csv

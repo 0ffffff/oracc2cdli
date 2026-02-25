@@ -4,27 +4,27 @@
   "counts": {
     "exact": 11363,
     "high": 89,
-    "conversion_issue": 3196,
-    "likely_misaligned": 5352
+    "conversion_issue": 2560,
+    "likely_misaligned": 5988
   },
   "pct": {
     "exact": 56.8,
     "high": 0.4,
-    "conversion_issue": 16.0,
-    "likely_misaligned": 26.8
+    "conversion_issue": 12.8,
+    "likely_misaligned": 29.9
   },
   "mean_sim_cdli_to_oracc": 0.6864,
   "mean_sim_oracc_to_cdli": 0.6994,
   "very_low_similarity": {
     "sim_c2o_below_10pct": 2648,
     "sim_o2c_below_10pct": 2255,
-    "sim_c2o_below_25pct": 5134,
-    "sim_o2c_below_25pct": 4823
+    "sim_c2o_below_25pct": 5846,
+    "sim_o2c_below_25pct": 5542
   },
   "thresholds": {
     "SIM_EXACT": 1.0,
     "SIM_HIGH": 0.95,
-    "SIM_LIKELY_MISALIGNED": 0.25,
+    "SIM_LIKELY_MISALIGNED": 0.3,
     "SIM_VERY_LOW": 0.1
   },
   "examples_misaligned": [
@@ -83,6 +83,12 @@
       "sim_o2c": 0.182
     },
     {
+      "tr_cdli": "lugal",
+      "tr_oracc": "mu",
+      "sim_c2o": 0.286,
+      "sim_o2c": 0.286
+    },
+    {
       "tr_cdli": "sze#-a#",
       "tr_oracc": "sag",
       "sim_c2o": 0.222,
@@ -101,21 +107,15 @@
       "sim_o2c": 0.0
     },
     {
-      "tr_cdli": "5(disz)",
-      "tr_oracc": "ud₅",
-      "sim_c2o": 0.222,
-      "sim_o2c": 0.2
+      "tr_cdli": "ur-e2-ninnu",
+      "tr_oracc": "ugula",
+      "sim_c2o": 0.25,
+      "sim_o2c": 0.25
     },
     {
-      "tr_cdli": "sze-ba",
-      "tr_oracc": "ki",
-      "sim_c2o": 0.0,
-      "sim_o2c": 0.0
-    },
-    {
-      "tr_cdli": "szunigin",
-      "tr_oracc": "1(eše₃)",
-      "sim_c2o": 0.143,
+      "tr_cdli": "mu",
+      "tr_oracc": "us₂-sa",
+      "sim_c2o": 0.25,
       "sim_o2c": 0.25
     }
   ],
@@ -167,28 +167,12 @@
       "sim_o2c": 0.444
     },
     {
-      "tr_cdli": "lugal",
-      "tr_oracc": "mu",
-      "pred_oracc": "lugal",
-      "pred_cdli": "mu",
-      "sim_c2o": 0.286,
-      "sim_o2c": 0.286
-    },
-    {
       "tr_cdli": "[a2-bi]",
       "tr_oracc": "a₂-bi",
       "pred_oracc": "[a₂-bi]",
       "pred_cdli": "a2-bi",
       "sim_c2o": 0.833,
       "sim_o2c": 0.833
-    },
-    {
-      "tr_cdli": "ur-e2-ninnu",
-      "tr_oracc": "ugula",
-      "pred_oracc": "ur-e₂-ninnu",
-      "pred_cdli": "ugula",
-      "sim_c2o": 0.25,
-      "sim_o2c": 0.25
     },
     {
       "tr_cdli": "2(u)",
@@ -199,28 +183,44 @@
       "sim_o2c": 0.364
     },
     {
-      "tr_cdli": "mu",
-      "tr_oracc": "us₂-sa",
-      "pred_oracc": "mu",
-      "pred_cdli": "us2-sa",
-      "sim_c2o": 0.25,
-      "sim_o2c": 0.25
-    },
-    {
-      "tr_cdli": "ki",
-      "tr_oracc": "ugnim",
-      "pred_oracc": "ki",
-      "pred_cdli": "ugnim",
-      "sim_c2o": 0.286,
-      "sim_o2c": 0.286
-    },
-    {
       "tr_cdli": "($",
       "tr_oracc": "2(u)",
       "pred_oracc": "($",
       "pred_cdli": "2(u)",
       "sim_c2o": 0.333,
       "sim_o2c": 0.333
+    },
+    {
+      "tr_cdli": "8(gesz2)",
+      "tr_oracc": "8(geš₂)",
+      "pred_oracc": "8(geš2)",
+      "pred_cdli": "8(gesz2)",
+      "sim_c2o": 0.857,
+      "sim_o2c": 1.0
+    },
+    {
+      "tr_cdli": "kiszib3",
+      "tr_oracc": "kid",
+      "pred_oracc": "kišib₃",
+      "pred_cdli": "kid",
+      "sim_c2o": 0.444,
+      "sim_o2c": 0.4
+    },
+    {
+      "tr_cdli": "nu-ur4",
+      "tr_oracc": "udu",
+      "pred_oracc": "nu-ur₄",
+      "pred_cdli": "udu",
+      "sim_c2o": 0.444,
+      "sim_o2c": 0.444
+    },
+    {
+      "tr_cdli": "3(disz)",
+      "tr_oracc": "4(diš)",
+      "pred_oracc": "3(diš)",
+      "pred_cdli": "4(disz)",
+      "sim_c2o": 0.833,
+      "sim_o2c": 0.857
     }
   ]
 }

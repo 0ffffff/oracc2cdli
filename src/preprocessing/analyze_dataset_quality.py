@@ -42,7 +42,7 @@ RANDOM_STATE = 42
 # Similarity thresholds
 SIM_EXACT = 1.0
 SIM_HIGH = 0.95
-SIM_LIKELY_MISALIGNED = 0.25  # below this: likely different words
+SIM_LIKELY_MISALIGNED = 0.30  # below this: likely different words
 SIM_VERY_LOW = 0.10           # near 0%: almost certainly misaligned
 
 

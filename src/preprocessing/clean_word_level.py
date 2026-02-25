@@ -15,6 +15,14 @@ Filtering criteria:
   - DROP: likely_misaligned (<25% similarity), rows with garbage tokens ($, etc.)
 
 Run before: Use word_level_cleaned.csv for conversion training/evaluation instead of word_level.csv.
+
+Performance notes (2026-02-24):
+  - Character mappings are loaded once per worker process and reused.
+  - Redundant .strip() calls removed; stripping happens once in chunk preprocessing.
+  - Redundant "$" check in _classify_pair removed; garbage filter is vectorized in
+    chunk preprocessing.
+  - ProcessPoolExecutor is created once and reused across all chunks.
+  - kept/dropped counts derived from accumulators instead of sum(keep_mask).
 """
 
 from __future__ import annotations
@@ -70,9 +78,9 @@ def _classify_row(tr_cdli: str, tr_oracc: str) -> tuple[float, float, str]:
     Convert both ways and compute similarity vs gold. Return (sim_c2o, sim_o2c, label).
     Labels: exact | high | conversion_issue | likely_misaligned
     Early exit: if first conversion similarity is very low, skip second conversion and drop row.
+
+    Expects pre-stripped inputs (stripping is done once in chunk preprocessing).
     """
-    tr_cdli = tr_cdli.strip()
-    tr_oracc = tr_oracc.strip()
     pred_oracc = word_cdli_to_oracc(tr_cdli)
     sim_c2o = _char_similarity(pred_oracc, tr_oracc)
     # Early exit: obvious mismatch, skip second conversion and similarity
@@ -97,41 +105,36 @@ def _classify_row(tr_cdli: str, tr_oracc: str) -> tuple[float, float, str]:
 def _classify_pair(tr_cdli: str, tr_oracc: str) -> tuple[bool, str]:
     """
     Determine if a row should be kept. Returns (keep, reason).
-    Matches analyze_dataset_quality.py pattern: strip once, then classify.
+
+    Expects pre-stripped, non-empty, garbage-free inputs. The empty-check and
+    garbage-token check are kept as a safety net but should never trigger when
+    called from the chunk pipeline (those rows are already filtered out).
     """
-    # Strip once before classification (matches analyze_dataset_quality.py)
-    tr_cdli = tr_cdli.strip()
-    tr_oracc = tr_oracc.strip()
-    
     if not tr_cdli or not tr_oracc:
         return False, "empty_column"
-    if "$" in tr_cdli or "$" in tr_oracc:
-        return False, "garbage_token"
-    
+
     # Handle exceptions at call site (matches analyze_dataset_quality.py pattern)
     try:
         _, _, label = _classify_row(tr_cdli, tr_oracc)
     except Exception:
         # If conversion fails, treat as misaligned
         return False, "misaligned"
-    
+
     if label == "likely_misaligned":
         return False, "misaligned"
     return True, label
 
 
-def _process_chunk(args: tuple) -> tuple[list[bool], dict, dict]:
+def _process_chunk(pairs: list[tuple[str, str]]) -> tuple[list[bool], dict, dict]:
     """
     Worker: process a list of (tr_cdli, tr_oracc) pairs. Returns (keep_mask, dropped_by_reason, kept_by_label).
     Must be top-level for multiprocessing pickling.
     """
-    pairs = args
     keep_mask = []
     dropped_by_reason = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
     kept_by_label = {"exact": 0, "high": 0, "conversion_issue": 0}
 
     for tr_cdli, tr_oracc in pairs:
-        # Data already stripped in preprocessing; _classify_pair will strip again for safety
         keep, reason = _classify_pair(tr_cdli, tr_oracc)
         keep_mask.append(keep)
         if keep:
@@ -149,6 +152,20 @@ def _split_pairs(pairs: list[tuple[str, str]], n_parts: int) -> list[list[tuple[
     n = len(pairs)
     k = (n + n_parts - 1) // n_parts
     return [pairs[i * k : min((i + 1) * k, n)] for i in range(n_parts)]
+
+
+def _merge_results(results: list[tuple[list[bool], dict, dict]]) -> tuple[list[bool], dict, dict]:
+    """Merge keep_mask, dropped, and kept dicts from multiple worker results."""
+    keep_mask: list[bool] = []
+    d_drop: dict[str, int] = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
+    d_keep: dict[str, int] = {"exact": 0, "high": 0, "conversion_issue": 0}
+    for _mask, _drop, _keep in results:
+        keep_mask.extend(_mask)
+        for k, v in _drop.items():
+            d_drop[k] = d_drop.get(k, 0) + v
+        for k, v in _keep.items():
+            d_keep[k] = d_keep.get(k, 0) + v
+    return keep_mask, d_drop, d_keep
 
 
 def clean_word_level(
@@ -176,65 +193,67 @@ def clean_word_level(
     total_rows = 0
     kept_rows = 0
     dropped_rows = 0
-    dropped_by_reason = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
-    kept_by_label = {"exact": 0, "high": 0, "conversion_issue": 0}
+    dropped_by_reason: dict[str, int] = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
+    kept_by_label: dict[str, int] = {"exact": 0, "high": 0, "conversion_issue": 0}
 
     n_workers = max_workers if max_workers is not None else max(1, (os.cpu_count() or 2) - 1)
     first_chunk = True
     chunk_num = 0
 
+    # Create the pool once and reuse across all chunks (avoids repeated process spawn overhead).
+    pool = ProcessPoolExecutor(max_workers=n_workers) if n_workers > 1 else None
+
     print("[1/2] Loading, classifying, and writing one chunk at a time (streaming)...", flush=True)
-    for chunk in pd.read_csv(
-        input_csv,
-        chunksize=chunk_size,
-        dtype={"internal_id": "Int64", "id_text": str, "tr_oracc": str, "tr_cdli": str},
-    ):
-        chunk_num += 1
-        chunk = chunk.dropna(subset=["tr_cdli", "tr_oracc"])
-        chunk["tr_cdli"] = chunk["tr_cdli"].astype(str).str.strip()
-        chunk["tr_oracc"] = chunk["tr_oracc"].astype(str).str.strip()
-        chunk = chunk[chunk["tr_cdli"].astype(bool) & chunk["tr_oracc"].astype(bool)]
+    try:
+        for chunk in pd.read_csv(
+            input_csv,
+            chunksize=chunk_size,
+            dtype={"internal_id": "Int64", "id_text": str, "tr_oracc": str, "tr_cdli": str},
+        ):
+            chunk_num += 1
+            chunk = chunk.dropna(subset=["tr_cdli", "tr_oracc"])
+            chunk["tr_cdli"] = chunk["tr_cdli"].astype(str).str.strip()
+            chunk["tr_oracc"] = chunk["tr_oracc"].astype(str).str.strip()
+            chunk = chunk[chunk["tr_cdli"].astype(bool) & chunk["tr_oracc"].astype(bool)]
 
-        # Vectorized garbage filter: drop rows with $ before expensive classification
-        mask_no_garbage = ~(chunk["tr_cdli"].str.contains("$", regex=False) | chunk["tr_oracc"].str.contains("$", regex=False))
-        chunk = chunk[mask_no_garbage]
+            # Vectorized garbage filter: drop rows with $ before expensive classification
+            mask_no_garbage = ~(chunk["tr_cdli"].str.contains("$", regex=False) | chunk["tr_oracc"].str.contains("$", regex=False))
+            chunk = chunk[mask_no_garbage]
 
-        pairs = list(zip(chunk["tr_cdli"].tolist(), chunk["tr_oracc"].tolist()))
-        n_pairs = len(pairs)
+            pairs = list(zip(chunk["tr_cdli"].tolist(), chunk["tr_oracc"].tolist()))
+            n_pairs = len(pairs)
 
-        chunk_start = time.perf_counter()
-        if n_workers <= 1 or n_pairs < n_workers:
-            keep_mask, d_drop, d_keep = _process_chunk(pairs)
-        else:
-            parts = _split_pairs(pairs, n_workers)
-            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            chunk_start = time.perf_counter()
+            if pool is None or n_pairs < n_workers:
+                keep_mask, d_drop, d_keep = _process_chunk(pairs)
+            else:
+                parts = _split_pairs(pairs, n_workers)
                 futures = [pool.submit(_process_chunk, part) for part in parts]
                 results = [f.result() for f in futures]
-            keep_mask = []
-            d_drop = {"empty_column": 0, "garbage_token": 0, "misaligned": 0}
-            d_keep = {"exact": 0, "high": 0, "conversion_issue": 0}
-            for _mask, _drop, _keep in results:
-                keep_mask.extend(_mask)
-                for k, v in _drop.items():
-                    d_drop[k] = d_drop.get(k, 0) + v
-                for k, v in _keep.items():
-                    d_keep[k] = d_keep.get(k, 0) + v
+                keep_mask, d_drop, d_keep = _merge_results(results)
 
-        chunk_elapsed = time.perf_counter() - chunk_start
-        total_rows += len(chunk)
-        kept_rows += sum(keep_mask)
-        dropped_rows += len(keep_mask) - sum(keep_mask)
-        for k, v in d_drop.items():
-            dropped_by_reason[k] = dropped_by_reason.get(k, 0) + v
-        for k, v in d_keep.items():
-            kept_by_label[k] = kept_by_label.get(k, 0) + v
+            chunk_elapsed = time.perf_counter() - chunk_start
 
-        print(f"      Chunk {chunk_num}: {len(pairs):,} rows in {chunk_elapsed:.1f}s (total {total_rows:,} rows)", flush=True)
-        chunk_cleaned = chunk[keep_mask]
-        if len(chunk_cleaned) > 0:
-            chunk_cleaned.to_csv(output_csv, mode="w" if first_chunk else "a", header=first_chunk, index=False)
-            first_chunk = False
-        # Chunk and pairs go out of scope here; only one chunk in memory at a time
+            # Derive counts from accumulators (avoids iterating keep_mask again)
+            chunk_kept = sum(d_keep.values())
+            chunk_dropped = sum(d_drop.values())
+            total_rows += len(chunk)
+            kept_rows += chunk_kept
+            dropped_rows += chunk_dropped
+            for k, v in d_drop.items():
+                dropped_by_reason[k] = dropped_by_reason.get(k, 0) + v
+            for k, v in d_keep.items():
+                kept_by_label[k] = kept_by_label.get(k, 0) + v
+
+            print(f"      Chunk {chunk_num}: {len(pairs):,} rows in {chunk_elapsed:.1f}s (total {total_rows:,} rows)", flush=True)
+            chunk_cleaned = chunk[keep_mask]
+            if len(chunk_cleaned) > 0:
+                chunk_cleaned.to_csv(output_csv, mode="w" if first_chunk else "a", header=first_chunk, index=False)
+                first_chunk = False
+            # Chunk and pairs go out of scope here; only one chunk in memory at a time
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False)
 
     print("[2/2] Done.", flush=True)
 

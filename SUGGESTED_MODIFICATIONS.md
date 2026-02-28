@@ -1,3 +1,11 @@
+use bounded search -> logic of orientation of source/target pair
+for a given text_id:
+- start with source in row 1
+- look thru target list for match in target
+- next steps: test on unicode text
+
+
+
 # Suggested modifications (non-binding)
 
 Optional restructuring ideas. No code or directories have been changed; this file only documents suggestions.
